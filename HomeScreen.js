@@ -1,40 +1,124 @@
-import React, { useState } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { View, Text, TextInput, Button, FlatList, Image, TouchableOpacity, StyleSheet } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { AuthContext } from './AuthContext'; // Make sure to import the AuthContext
+import { getFirestore, doc, setDoc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore'; // Firestore functions
+import { app } from './firebase'; // Import your Firebase config
 
-const HomeScreen = () => {
+const HomeScreen = ({ navigation }) => {
   const [productName, setProductName] = useState('');
   const [productType, setProductType] = useState('');
   const [productPrice, setProductPrice] = useState('');
-  const [productList, setProductList] = useState([]);
+  const [productList, setProductList] = useState([]); // To store product list fetched from Firestore
   const [imageUri, setImageUri] = useState('');
+  const [editingIndex, setEditingIndex] = useState(null); // To track the product being edited
+  const { username } = useContext(AuthContext); // Get username from AuthContext
 
-  const addProduct = () => {
+  const db = getFirestore(app); // Initialize Firestore
+
+  // Fetch existing products from Firestore when component mounts
+  useEffect(() => {
+    const fetchProducts = async () => {
+      try {
+        const docRef = doc(db, 'products', username);
+        const docSnap = await getDoc(docRef);
+
+        if (docSnap.exists()) {
+          setProductList(docSnap.data().productList || []); // Set product list from Firestore
+        } else {
+          console.log('No such document!');
+        }
+      } catch (error) {
+        console.error('Error fetching products from Firestore: ', error);
+      }
+    };
+
+    fetchProducts();
+  }, [username]);
+
+  const addProduct = async () => {
     if (productName && productType && productPrice && imageUri) {
       const newProduct = {
         name: productName,
         type: productType,
         price: productPrice,
-        image: imageUri, // Image selected
+        image: imageUri,
       };
-      setProductList([...productList, newProduct]);
-      setProductName('');
-      setProductType('');
-      setProductPrice('');
-      setImageUri(''); // Clear image after adding product
+
+      try {
+        if (editingIndex !== null) {
+          // Update the product locally and in Firestore
+          const updatedList = [...productList];
+          updatedList[editingIndex] = newProduct;
+          setProductList(updatedList);
+          setEditingIndex(null); // Reset editing index
+
+          // Update Firestore document
+          await updateDoc(doc(db, 'products', username), {
+            productList: updatedList,
+          });
+        } else {
+          // Add new product locally
+          const updatedList = [...productList, newProduct];
+          setProductList(updatedList);
+
+          // Add to Firestore
+          await setDoc(doc(db, 'products', username), {
+            productList: arrayUnion(newProduct),
+          }, { merge: true });
+        }
+
+        // Reset form fields
+        setProductName('');
+        setProductType('');
+        setProductPrice('');
+        setImageUri('');
+      } catch (error) {
+        console.error('Error adding product to Firestore: ', error);
+      }
     }
   };
 
   const selectImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (permissionResult.granted === false) {
+      alert('Permission to access gallery is required!');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
       quality: 1,
     });
-  
-    if (!result.canceled) {
-      setImageUri(result.uri);
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      setImageUri(result.assets[0].uri); // Set the selected image
+    }
+  };
+
+  const editProduct = (index) => {
+    const product = productList[index];
+    setProductName(product.name);
+    setProductType(product.type);
+    setProductPrice(product.price);
+    setImageUri(product.image);
+    setEditingIndex(index); // Track the index of the product being edited
+  };
+
+  const deleteProduct = async (index) => {
+    const updatedList = productList.filter((_, i) => i !== index);
+    setProductList(updatedList);
+
+    try {
+      // Update Firestore after deleting the product
+      await updateDoc(doc(db, 'products', username), {
+        productList: updatedList,
+      });
+    } catch (error) {
+      console.error('Error deleting product from Firestore: ', error);
     }
   };
 
@@ -47,7 +131,7 @@ const HomeScreen = () => {
         <Text>Loại sp: {item.type}</Text>
       </View>
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.editButton}>
+        <TouchableOpacity style={styles.editButton} onPress={() => editProduct(index)}>
           <Text style={styles.actionText}>✏️</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.deleteButton} onPress={() => deleteProduct(index)}>
@@ -59,6 +143,7 @@ const HomeScreen = () => {
 
   return (
     <View style={styles.container}>
+      
       <Text style={styles.header}>Dữ liệu sản phẩm</Text>
       <TextInput
         style={styles.input}
@@ -85,7 +170,11 @@ const HomeScreen = () => {
           <Text>📁</Text>
         </TouchableOpacity>
       </View>
-      <Button title="Thêm sản phẩm" onPress={addProduct} color="#007BFF" />
+      <Button
+        title={editingIndex !== null ? 'Cập nhật sản phẩm' : 'Thêm sản phẩm'}
+        onPress={addProduct}
+        color="#007BFF"
+      />
 
       <Text style={styles.productListHeader}>Danh sách sản phẩm:</Text>
       <FlatList
@@ -94,6 +183,11 @@ const HomeScreen = () => {
         keyExtractor={(item, index) => index.toString()}
         ListEmptyComponent={<Text>Chưa có sản phẩm nào.</Text>}
       />
+      <Button title="Đăng xuất"   color="#007BFF" onPress={() => {
+          // Xử lý đăng xuất ở đây
+          navigation.replace('Login');
+          
+        }} />
     </View>
   );
 };
